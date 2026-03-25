@@ -1,29 +1,24 @@
 import os
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
+import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
 
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
 user_emails = {}
 
 
-# ------------------ API FUNCTIONS ------------------ #
+# ---------------- API ---------------- #
 def generate_email():
     try:
-        resp = requests.get(
-            "https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1",
-            timeout=10
-        )
-        data = resp.json()
-        return data[0] if data else None
-    except Exception as e:
-        print("Email generate error:", e)
+        r = requests.get("https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1", timeout=10)
+        return r.json()[0]
+    except:
         return None
 
 
@@ -31,8 +26,7 @@ def get_messages(login, domain):
     try:
         url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}"
         return requests.get(url, timeout=10).json()
-    except Exception as e:
-        print("Get messages error:", e)
+    except:
         return []
 
 
@@ -40,54 +34,45 @@ def read_message(login, domain, msg_id):
     try:
         url = f"https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={msg_id}"
         return requests.get(url, timeout=10).json()
-    except Exception as e:
-        print("Read message error:", e)
+    except:
         return {}
 
 
-# ------------------ HANDLERS ------------------ #
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("📧 Generate Email", callback_data="gen")]
-    ]
+# ---------------- HANDLERS ---------------- #
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📧 Generate Email", callback_data="gen")]
+    ])
 
-    await update.effective_message.reply_text(
-        "Choose option:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await message.answer("Choose option:", reply_markup=kb)
 
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+@dp.callback_query()
+async def buttons(call: types.CallbackQuery):
+    user_id = call.from_user.id
 
-    user_id = query.from_user.id
-
-    # -------- GENERATE EMAIL -------- #
-    if query.data == "gen":
+    # GENERATE EMAIL
+    if call.data == "gen":
         email = generate_email()
 
         if not email:
-            await query.edit_message_text("❌ Error generating email. Try again.")
+            await call.message.edit_text("❌ Error generating email")
             return
 
         user_emails[user_id] = email
 
-        keyboard = [
-            [InlineKeyboardButton("📥 Check Inbox", callback_data="check")],
-            [InlineKeyboardButton("🔄 New Email", callback_data="gen")]
-        ]
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📥 Check Inbox", callback_data="check")],
+            [InlineKeyboardButton(text="🔄 New Email", callback_data="gen")]
+        ])
 
-        await query.edit_message_text(
-            f"📧 Your Email:\n`{email}`",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await call.message.edit_text(f"📧 Your Email:\n`{email}`", reply_markup=kb, parse_mode="Markdown")
 
-    # -------- CHECK INBOX -------- #
-    elif query.data == "check":
+    # CHECK INBOX
+    elif call.data == "check":
         if user_id not in user_emails:
-            await query.edit_message_text("⚠️ Generate email first.")
+            await call.message.edit_text("⚠️ Generate email first")
             return
 
         email = user_emails[user_id]
@@ -96,44 +81,32 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msgs = get_messages(login, domain)
 
         if not msgs:
-            await query.edit_message_text(
-                "📭 No messages yet.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Refresh", callback_data="check")],
-                    [InlineKeyboardButton("📧 New Email", callback_data="gen")]
-                ])
-            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Refresh", callback_data="check")],
+                [InlineKeyboardButton(text="📧 New Email", callback_data="gen")]
+            ])
+            await call.message.edit_text("📭 No messages yet", reply_markup=kb)
             return
 
         text = "📥 Inbox:\n\n"
 
         for msg in msgs:
             data = read_message(login, domain, msg["id"])
+            text += f"From: {data.get('from')}\nSubject: {data.get('subject')}\n\n{data.get('textBody')}\n\n---\n"
 
-            sender = data.get("from", "Unknown")
-            subject = data.get("subject", "No Subject")
-            body = data.get("textBody", "No Content")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="check")],
+            [InlineKeyboardButton(text="📧 New Email", callback_data="gen")]
+        ])
 
-            text += f"From: {sender}\nSubject: {subject}\n\n{body}\n\n{'-'*20}\n"
-
-        await query.edit_message_text(
-            text[:4000],
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh", callback_data="check")],
-                [InlineKeyboardButton("📧 New Email", callback_data="gen")]
-            ])
-        )
+        await call.message.edit_text(text[:4000], reply_markup=kb)
 
 
-# ------------------ MAIN ------------------ #
+# ---------------- MAIN ---------------- #
+async def main():
+    print("✅ Bot running (Python 3.14)...")
+    await dp.start_polling(bot)
+
+
 if __name__ == "__main__":
-    if not TOKEN:
-        raise ValueError("BOT_TOKEN not set in environment variables")
-
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-
-    print("✅ Bot running...")
-    app.run_polling()
+    asyncio.run(main())
