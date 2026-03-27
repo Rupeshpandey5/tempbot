@@ -1,42 +1,33 @@
 import os
 import requests
-import asyncio
 from datetime import datetime, timedelta
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ---------------- CONFIG ---------------- #
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://tempbot-1-q0wo.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 OTP_VALIDITY_MINUTES = 10
 user_emails = {}
 
-# ---------------- FLASK APP ---------------- #
 app = Flask(__name__)
-
-# ---------------- TELEGRAM BOT ---------------- #
-tg_app = Application.builder().token(TOKEN).build()
 
 # ---------------- TEMP MAIL FUNCTIONS ---------------- #
 def generate_email():
     try:
-        url = "https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1"
-        return requests.get(url, timeout=10).json()[0]
+        return requests.get("https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1", timeout=10).json()[0]
     except:
         return None
 
 def get_messages(login, domain):
     try:
-        url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}"
-        return requests.get(url).json()
+        return requests.get(f"https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}", timeout=10).json()
     except:
         return []
 
 def read_message(login, domain, msg_id):
     try:
-        url = f"https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={msg_id}"
-        return requests.get(url).json()
+        return requests.get(f"https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={msg_id}", timeout=10).json()
     except:
         return {}
 
@@ -94,15 +85,16 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_emails.pop(user_id, None)
         await q.edit_message_text("🗑 Email deleted")
 
-tg_app.add_handler(CommandHandler("start", start))
-tg_app.add_handler(CallbackQueryHandler(buttons))
+# ---------------- TELEGRAM APPLICATION ---------------- #
+app_bot = ApplicationBuilder().token(TOKEN).build()
+app_bot.add_handler(CommandHandler("start", start))
+app_bot.add_handler(CallbackQueryHandler(buttons))
 
 # ---------------- FLASK ROUTES ---------------- #
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, tg_app.bot)
-    asyncio.run(tg_app.process_update(update))
+    update = Update.de_json(request.get_json(force=True), app_bot.bot)
+    app_bot.create_task(app_bot.process_update(update))
     return "ok"
 
 @app.route("/")
@@ -111,7 +103,8 @@ def home():
 
 # ---------------- STARTUP ---------------- #
 if __name__ == "__main__":
-    asyncio.run(tg_app.initialize())
-    asyncio.run(tg_app.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}"))
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(app_bot.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}"))
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
